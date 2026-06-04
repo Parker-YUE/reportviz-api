@@ -93,7 +93,7 @@ def ai_parse(text):
             {"role": "system", "content": prompt},
             {"role": "user", "content": "请解析以下报告，输出标准化JSON：\n\n" + text}
         ],
-        temperature=0.3,
+        temperature=0.1,
         max_tokens=4000
     )
     result = resp.choices[0].message.content.strip()
