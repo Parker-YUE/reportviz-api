@@ -14,7 +14,7 @@ app = FastAPI()
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-AI_API_KEY = "sk-4781e06a3d9349568cf6e70365e3843d"
+AI_API_KEY = os.environ.get("AI_API_KEY", "sk-4781e06a3d9349568cf6e70365e3843d")
 AI_BASE_URL = "https://api.deepseek.com"
 AI_MODEL = "deepseek-chat"
 
@@ -160,9 +160,5 @@ async def parse_report(file: Optional[UploadFile] = File(None), text: Optional[s
 
 if __name__ == "__main__":
     import uvicorn
-    print("=" * 50)
-    print("  ReportViz API 启动中...")
-    print("  地址: http://localhost:8000")
-    print("  文档: http://localhost:8000/docs")
-    print("=" * 50)
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
