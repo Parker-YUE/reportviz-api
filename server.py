@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import re
+import hashlib
 from typing import Optional
 import PyPDF2
 from docx import Document
@@ -15,15 +16,23 @@ app = FastAPI()
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-AI_API_KEY = os.environ.get("AI_API_KEY", "sk-在这里粘贴你的DeepSeek密钥")
+AI_API_KEY = os.environ.get("AI_API_KEY", "sk-placeholder")
 AI_BASE_URL = "https://api.deepseek.com"
 AI_MODEL = "deepseek-chat"
 
 client = OpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL)
 
+CACHE = {}
+MAX_CACHE = 200
+
 
 def clean_text(text):
     return text.encode('utf-8', errors='ignore').decode('utf-8')
+
+
+def text_hash(text):
+    normalized = re.sub(r'\s+', ' ', text.strip())[:5000]
+    return hashlib.md5(normalized.encode('utf-8')).hexdigest()
 
 
 def get_system_prompt():
@@ -96,20 +105,28 @@ def fix_scores(data):
                 if isinstance(score, str):
                     try:
                         score = int(float(score))
-                    except:
+                    except Exception:
                         score = 70
+                if isinstance(score, float):
+                    score = int(score)
                 if score <= 10:
                     score = score * 10
                 if score < 50:
                     score = 50
                 if score > 100:
                     score = 100
-                dim["score"] = int(score)
+                dim["score"] = score
             if dims:
-                total = sum(d["score"] for d in dims) // len(dims)
-                section["total_score"] = total
+                total = 0
+                for d in dims:
+                    total += d["score"]
+                section["total_score"] = total // len(dims)
             else:
                 section["total_score"] = 70
+    meta = data.get("meta", {})
+    if not meta.get("duration") or meta["duration"] == "—":
+        meta["duration"] = "60分钟"
+    data["meta"] = meta
     return data
 
 
@@ -123,9 +140,10 @@ def ai_parse(text):
             {"role": "system", "content": prompt},
             {"role": "user", "content": "请解析以下报告，输出标准化JSON：\n\n" + text}
         ],
-        temperature=0.05,
+        temperature=0.0,
         max_tokens=4000,
-        top_p=0.9
+        top_p=1.0,
+        seed=42
     )
     result = resp.choices[0].message.content.strip()
     if result.startswith("```"):
@@ -140,19 +158,19 @@ def ai_parse(text):
         result = json_match.group()
     data = json.loads(result)
     if "title" not in data or "sections" not in data:
-        raise ValueError("JSON缺少字段")
+        raise ValueError("JSON缺少必要字段")
     data = fix_scores(data)
     return data
 
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "ReportViz API v2.1"}
+    return {"status": "ok", "message": "ReportViz API v2.2"}
 
 
 @app.get("/api/health")
 def health():
-    return {"status": "healthy", "ai_model": AI_MODEL}
+    return {"status": "healthy", "ai_model": AI_MODEL, "cache_size": len(CACHE)}
 
 
 @app.post("/api/parse")
@@ -184,8 +202,15 @@ async def parse_report(file: Optional[UploadFile] = File(None), text: Optional[s
         return JSONResponse(status_code=400, content={"detail": "请上传文件或输入文本"})
     if len(input_text) < 30:
         return JSONResponse(status_code=400, content={"detail": "内容太短"})
+    content_hash = text_hash(input_text)
+    if content_hash in CACHE:
+        return JSONResponse(content=CACHE[content_hash])
     try:
         result = ai_parse(input_text)
+        if len(CACHE) >= MAX_CACHE:
+            oldest_key = next(iter(CACHE))
+            del CACHE[oldest_key]
+        CACHE[content_hash] = result
         return JSONResponse(content=result)
     except json.JSONDecodeError as e:
         return JSONResponse(status_code=500, content={"detail": "AI返回格式错误: " + str(e)})
@@ -196,4 +221,4 @@ async def parse_report(file: Optional[UploadFile] = File(None), text: Optional[s
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("server:app", host="0.0.0.0", port=port, workers=2, timeout_keep_alive=120)
+    uvicorn.run(app, host="0.0.0.0", port=port)
