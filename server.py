@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 import json
 import os
 import tempfile
+import re
 from typing import Optional
 import PyPDF2
 from docx import Document
@@ -14,7 +15,7 @@ app = FastAPI()
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-AI_API_KEY = os.environ.get("AI_API_KEY", "sk-4781e06a3d9349568cf6e70365e3843d")
+AI_API_KEY = os.environ.get("AI_API_KEY", "sk-在这里粘贴你的DeepSeek密钥")
 AI_BASE_URL = "https://api.deepseek.com"
 AI_MODEL = "deepseek-chat"
 
@@ -83,6 +84,35 @@ def extract_txt(path):
     raise Exception("TXT编码无法识别")
 
 
+def fix_scores(data):
+    sections = data.get("sections", [])
+    for section in sections:
+        if section.get("type") == "radar_score":
+            dims = section.get("dimensions", [])
+            for dim in dims:
+                score = dim.get("score", 0)
+                if score is None:
+                    score = 70
+                if isinstance(score, str):
+                    try:
+                        score = int(float(score))
+                    except:
+                        score = 70
+                if score <= 10:
+                    score = score * 10
+                if score < 50:
+                    score = 50
+                if score > 100:
+                    score = 100
+                dim["score"] = int(score)
+            if dims:
+                total = sum(d["score"] for d in dims) // len(dims)
+                section["total_score"] = total
+            else:
+                section["total_score"] = 70
+    return data
+
+
 def ai_parse(text):
     if len(text) > 15000:
         text = text[:15000]
@@ -93,8 +123,9 @@ def ai_parse(text):
             {"role": "system", "content": prompt},
             {"role": "user", "content": "请解析以下报告，输出标准化JSON：\n\n" + text}
         ],
-        temperature=0.1,
-        max_tokens=4000
+        temperature=0.05,
+        max_tokens=4000,
+        top_p=0.9
     )
     result = resp.choices[0].message.content.strip()
     if result.startswith("```"):
@@ -104,15 +135,19 @@ def ai_parse(text):
     if result.endswith("```"):
         result = result[:-3]
     result = result.strip()
+    json_match = re.search(r'\{[\s\S]*\}', result)
+    if json_match:
+        result = json_match.group()
     data = json.loads(result)
     if "title" not in data or "sections" not in data:
         raise ValueError("JSON缺少字段")
+    data = fix_scores(data)
     return data
 
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "ReportViz API v2.0"}
+    return {"status": "ok", "message": "ReportViz API v2.1"}
 
 
 @app.get("/api/health")
@@ -161,4 +196,4 @@ async def parse_report(file: Optional[UploadFile] = File(None), text: Optional[s
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port, workers=2, timeout_keep_alive=120)
