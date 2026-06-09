@@ -18,7 +18,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 AI_API_KEY = os.environ.get("AI_API_KEY", "sk-placeholder")
 AI_BASE_URL = "https://api.deepseek.com"
-AI_MODEL = "deepseek-chat"
+AI_MODEL = "deepseek-v4-pro"
 
 client = OpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL)
 
